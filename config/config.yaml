@@ -24,7 +24,7 @@ training:
   device: 'cuda'
   batch_size: 4
   random_seed: 42
-  epochs: 200
+  epochs: 5
   g_lr: 0.0001
   d_lr: 0.0001
   n_critics: 5
@@ -36,6 +36,7 @@ training:
   num_workers: 0
   log_interval: 10 # iteration
   save_interval: 10 # epoch
+  val_interval: 5 # epoch
   sample_interval: 1000000000 # epoch
   resume_training: False
   resume_checkpoint: ''

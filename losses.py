@@ -3,6 +3,7 @@ import torch.nn.functional as F
 
 
 def adverarial_loss(output):
+    #
     return -torch.mean(output)  # -log(D(x))
 
 

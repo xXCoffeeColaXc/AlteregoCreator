@@ -1,11 +1,12 @@
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import transforms, datasets
 import os
 from pathlib import Path
 from PIL import Image
 import numpy as np
 from config.models import DataConfig, TrainingConfig
+from utils import load_config
 
 # NOTE: handle train/val/test somehow
 
@@ -73,20 +74,78 @@ def get_loader(data_config: DataConfig, train_config: TrainingConfig, split: str
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ]
         )
-    elif split == 'val':
+    elif split == 'val' or split == 'test':
         transform = transforms.Compose(
             [
                 transforms.CenterCrop(data_config.crop_size),
                 transforms.Resize(data_config.image_size),
-                transforms.ToTensor(),  #transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ]
         )
 
-    dataset = CelebA(data_config, transform)
-    return DataLoader(
-        dataset=dataset, batch_size=train_config.batch_size, shuffle=True, num_workers=train_config.num_workers
-    )
+    full_dataset = CelebA(data_config, transform)
+
+    total_size = len(full_dataset)
+    train_size = int(0.7 * total_size)
+    val_size = int(0.15 * total_size)
+    test_size = total_size - train_size - val_size
+
+    train_dataset, val_dataset, test_dataset = random_split(full_dataset, [train_size, val_size, test_size],
+                                                            generator=torch.Generator().manual_seed(train_config.random_seed))
+
+    if split == 'train':
+        train_dataset.dataset.transform = transform
+        data_loader = DataLoader(
+            dataset=train_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=True,
+            num_workers=train_config.num_workers,
+            pin_memory=True
+        )
+    elif split == 'val':
+        val_dataset.dataset.transform = transform
+        data_loader = DataLoader(
+            dataset=val_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=False,
+            num_workers=train_config.num_workers,
+            pin_memory=True
+        )
+    else:
+        test_dataset.dataset.transform = transform
+        data_loader = DataLoader(
+            dataset=test_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=False,
+            num_workers=train_config.num_workers,
+            pin_memory=True
+        )
+
+    return data_loader
 
 
 if __name__ == '__main__':
-    pass
+    config = load_config('config/config.yaml')
+
+    data_config = config.data
+    train_config = config.training
+
+    train_loader = get_loader(data_config, train_config, 'train')
+    print(len(train_loader.dataset))
+    val_loader = get_loader(data_config, train_config, 'val')
+    print(len(val_loader.dataset))
+    test_loader = get_loader(data_config, train_config, 'test')
+    print(len(test_loader.dataset))
+
+    for i, (images, labels) in enumerate(train_loader):
+        print(images.shape, labels.shape)
+        break
+
+    for i, (images, labels) in enumerate(val_loader):
+        print(images.shape, labels.shape)
+        break
+
+    for i, (images, labels) in enumerate(test_loader):
+        print(images.shape, labels.shape)
+        break

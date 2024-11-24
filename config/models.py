@@ -43,6 +43,7 @@ class TrainingConfig(BaseModel):
     num_workers: int
     log_interval: int
     save_interval: int
+    val_interval: int
     sample_interval: int
     resume_training: bool
     resume_checkpoint: Optional[str] = None
