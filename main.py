@@ -2,15 +2,18 @@ import torch
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
+import wandb
 from torch.optim.lr_scheduler import LambdaLR
 from losses import adverarial_loss, classification_loss, reconstruction_loss
 from network import Generator, Discriminator
 from dataloader import CelebA, get_loader
 from torch.utils.data import DataLoader
-from config.models import ModelConfig, TrainingConfig, FolderConfig
-from utils import load_config
+from config.models import ModelConfig, TrainingConfig, FolderConfig, Config
+from utils import load_config, denorm, generate_valid_permutations, generate_one_valid_permutation_batch, create_run, setup_logger
+from torchvision.utils import save_image
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+run_id = create_run()
 
 
 def get_linear_decay_scheduler(optimizer: torch.optim.Optimizer, num_epochs: int, num_epochs_decay: int):
@@ -69,6 +72,13 @@ def build_models(model_config: ModelConfig, train_config: TrainingConfig):
     return G, D, g_optimizer, d_optimizer
 
 
+def load_checkpoint(checkpoint_path: Path, model_config: ModelConfig):
+    G = Generator(model_config).to(device)
+    checkpoint = torch.load(checkpoint_path)
+    G.load_state_dict(checkpoint['G'])
+    return G
+
+
 def save_checkpoint(
     G: Generator,
     D: Discriminator,
@@ -77,8 +87,8 @@ def save_checkpoint(
     epoch: int,
     checkpoint_dir: Path
 ):
-    G_path = checkpoint_dir / f'{epoch}-G.ckpt'
-    D_path = checkpoint_dir / f'{epoch}-D.ckpt'
+    G_path = checkpoint_dir / str(run_id) / f'{epoch}-G.ckpt'
+    D_path = checkpoint_dir / str(run_id) / f'{epoch}-D.ckpt'
 
     torch.save({'G': G.state_dict(), 'g_optimizer': g_optimizer.state_dict(), 'epoch': epoch}, G_path)
     torch.save({'D': D.state_dict(), 'd_optimizer': d_optimizer.state_dict(), 'epoch': epoch}, D_path)
@@ -156,9 +166,10 @@ def train(
     d_sheduler: torch.optim.lr_scheduler.LinearLR,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
-    train_config: TrainingConfig,
-    save_dir: Path
+    config: Config
 ):
+    train_config = config.training
+    data_config = config.data
 
     for epoch in range(1, train_config.epochs + 1):
 
@@ -173,8 +184,7 @@ def train(
             label_org = label_org.to(device)  # Labels for computing classification loss.
 
             # Generate target domain labels randomly.
-            rand_idx = torch.randperm(label_org.size(0))  # size: config.num_classes
-            label_trg = label_org[rand_idx].to(device)  # Labels for computing classification loss.
+            label_trg = generate_one_valid_permutation_batch(label_org, data_config.selected_attrs).to(device)
 
             c_org = label_org.clone().to(device)  # Original domain labels.
             c_trg = label_trg.clone().to(device)  # Target domain labels.
@@ -208,6 +218,8 @@ def train(
                     }
                 )
 
+                wandb.log({"G_loss": g_loss.item(), "D_loss": d_loss.item()})
+
         # Step learning rate scheduler
         g_sheduler.step()
         d_sheduler.step()
@@ -221,12 +233,23 @@ def train(
             f"Epoch [{epoch}/{train_config.epochs}] \t Avg_G_loss: {avg_g_loss:.4f} \t Avg_D_loss: {avg_d_loss:.4f} \t G_lr: {g_optimizer.param_groups[0]['lr']:.6f} \t D_lr: {d_optimizer.param_groups[0]['lr']:.6f}"
         )
 
+        wandb.log(
+            {
+                "Epoch": epoch,
+                "Avg_G_loss": avg_g_loss,
+                "Avg_D_loss": avg_d_loss,
+                "G_lr": g_optimizer.param_groups[0]['lr'],
+                "D_lr": d_optimizer.param_groups[0]['lr']
+            }
+        )
+
         # Validate model
         if epoch % train_config.val_interval == 0:
             validate(G, D, val_dataloader, train_config)
 
         # Save model checkpoints
         if epoch % train_config.save_interval == 0:
+            save_dir = Path(config.folders.checkpoints)
             save_checkpoint(G, D, g_optimizer, d_optimizer, epoch, save_dir)
 
 
@@ -261,32 +284,35 @@ def validate(G: Generator, D: Discriminator, val_dataloader: DataLoader, train_c
     G.train()
 
     print(f"Validation: G_loss: {np.mean(g_losses):.4f} \t D_loss: {np.mean(d_losses):.4f}")
+    wandb.log({"Val_G_loss": np.mean(g_losses), "Val_D_loss": np.mean(d_losses)})
 
 
-def test():
-    pass
-    # with torch.no_grad():
-    #     for i, (x_real, c_org) in enumerate(data_loader):
+def test(G: Generator, test_dataloader: DataLoader, config: Config):
+    with torch.no_grad():
+        for i, (x_real, c_org) in enumerate(test_dataloader):
 
-    #         # Prepare input images and target domain labels.
-    #         x_real = x_real.to(device)
-    #         c_trg_list = create_labels(c_org, c_dim, dataset, selected_attrs)
+            # Prepare input images and target domain labels.
+            x_real = x_real.to(device)
+            c_trg_list = generate_valid_permutations(c_org[0], config.data.selected_attrs)  # not a batch
 
-    #         # Translate images.
-    #         x_fake_list = [x_real]
-    #         for c_trg in c_trg_list:
-    #             x_fake_list.append(G(x_real, c_trg))
+            # Translate images.
+            x_fake_list = [x_real]
+            for c_trg in c_trg_list:
+                x_fake_list.append(G(x_real, c_trg))
 
-    #         # Save the translated images.
-    #         x_concat = torch.cat(x_fake_list, dim=3)
-    #         result_path = os.path.join(result_dir, '{}-images.jpg'.format(i + 1))
-    #         save_image(denorm(x_concat.data.cpu()), result_path, nrow=1, padding=0)
-    #         print('Saved real and fake images into {}...'.format(result_path))
+            # Save the translated images.
+            x_concat = torch.cat(x_fake_list, dim=3)
+            result_path = Path(config.folders.samples) / str(run_id) / f'{i+1}-images.jpg'
+            save_image(denorm(x_concat.data.cpu()), result_path, nrow=1, padding=0)
+            print('Saved real and fake images into {}...'.format(result_path))
 
 
 if __name__ == '__main__':
     # Load configurations
     config = load_config('config/config.yaml')
+
+    # Setup logger
+    setup_logger(config, device)
 
     # Create data loader
     train_dataloader = get_loader(config.data, config.training, 'train')
@@ -307,6 +333,12 @@ if __name__ == '__main__':
         d_sheduler=d_sheduler,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
-        train_config=config.training,
-        save_dir=Path(config.folders.checkpoints)
+        config=config,
     )
+
+    wandb.finish()
+
+    # Test the model
+    # test_dataloader = get_loader(config.data, config.training, 'test')
+    # G = load_checkpoint(Path(config.folders.checkpoints) / '1' / '100-G.ckpt', config.model)
+    # test(G, test_dataloader, config)
