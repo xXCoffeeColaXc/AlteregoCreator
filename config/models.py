@@ -6,7 +6,7 @@ class DataConfig(BaseModel):
     root_dir: str
     image_dir: str
     attributes_file: str
-    selected_attrs: Dict[int, Any]
+    selected_attrs: list
     crop_size: int
     image_size: int
 

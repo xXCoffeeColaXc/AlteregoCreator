@@ -72,16 +72,16 @@ def _find_max_run_id(checkpoint_path):
     return max_run_id
 
 
-def generate_one_valid_permutation_batch(batch_tensor: torch.Tensor, selected: dict) -> torch.Tensor:
+# Generate one valid permutation for each sample in the batch
+# (B, num_attr) -> (B, num_attr)
+def generate_one_valid_permutation_batch(batch_tensor: torch.Tensor, selected: list) -> torch.Tensor:
 
     age_attributes = ['Old', 'Young']
     gender_attributes = ['Male', 'Female']
     hair_attributes = ['Black_Hair', 'Blond_Hair', 'Brown_Hair']
-    sorted_keys = sorted(selected.keys())
-    attributes = [selected[key] for key in sorted_keys]
-    attr_to_index = {attr: idx for idx, attr in enumerate(attributes)}
+    attr_to_index = {attr: idx for idx, attr in enumerate(selected)}
     batch_size = batch_tensor.size(0)
-    num_attributes = len(attributes)
+    num_attributes = len(selected)
 
     perm_batch = torch.zeros((batch_size, num_attributes), dtype=batch_tensor.dtype, device=batch_tensor.device)
 
@@ -113,13 +113,11 @@ def generate_one_valid_permutation_batch(batch_tensor: torch.Tensor, selected: d
     return perm_batch
 
 
-def generate_valid_permutations(input_tensor: torch.Tensor, selected: dict) -> list[torch.Tensor]:
+def generate_valid_permutations(input_tensor: torch.Tensor, selected: list) -> list[torch.Tensor]:
     age_attributes = ['Old', 'Young']
     gender_attributes = ['Male', 'Female']
     hair_attributes = ['Black_Hair', 'Blond_Hair', 'Brown_Hair']
-    sorted_keys = sorted(selected.keys())
-    attributes = [selected[key] for key in sorted_keys]
-    attr_to_index = {attr: idx for idx, attr in enumerate(attributes)}
+    attr_to_index = {attr: idx for idx, attr in enumerate(selected)}
 
     valid_permutations = []
 

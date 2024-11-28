@@ -6,11 +6,12 @@ import wandb
 from torch.optim.lr_scheduler import LambdaLR
 from losses import adverarial_loss, classification_loss, reconstruction_loss
 from network import Generator, Discriminator
-from dataloader import CelebA, get_loader
+from dataloader import CelebA, get_loader, get_transform
 from torch.utils.data import DataLoader
 from config.models import ModelConfig, TrainingConfig, FolderConfig, Config
 from utils import load_config, denorm, generate_valid_permutations, generate_one_valid_permutation_batch, create_run, setup_logger
 from torchvision.utils import save_image
+from PIL import Image
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 run_id = create_run()
@@ -245,7 +246,7 @@ def train(
 
         # Validate model
         if epoch % train_config.val_interval == 0:
-            validate(G, D, val_dataloader, train_config)
+            validate(G, D, val_dataloader, train_config, data_config.selected_attrs)
 
         # Save model checkpoints
         if epoch % train_config.save_interval == 0:
@@ -253,7 +254,9 @@ def train(
             save_checkpoint(G, D, g_optimizer, d_optimizer, epoch, save_dir)
 
 
-def validate(G: Generator, D: Discriminator, val_dataloader: DataLoader, train_config: TrainingConfig):
+def validate(
+    G: Generator, D: Discriminator, val_dataloader: DataLoader, train_config: TrainingConfig, selected_attrs: list
+):
     G.eval()
     D.eval()
     d_losses = []
@@ -265,17 +268,32 @@ def validate(G: Generator, D: Discriminator, val_dataloader: DataLoader, train_c
             label_org = label_org.to(device)  # Labels for computing classification loss.
 
             # Generate target domain labels randomly.
-            rand_idx = torch.randperm(label_org.size(0))  # size: config.num_classes
-            label_trg = label_org[rand_idx].to(device)  # Labels for computing classification loss.
+            label_trg = generate_one_valid_permutation_batch(label_org, selected_attrs).to(device)
 
             c_org = label_org.clone().to(device)  # Original domain labels.
             c_trg = label_trg.clone().to(device)  # Target domain labels.
 
-            # Train discriminator
-            d_loss = calculate_discriminator_loss(D, G, x_real, label_org, c_trg, train_config)
+            # Calculate discriminator loss
+            out_src, out_cls = D(x_real)
+            d_loss_real = -torch.mean(out_src)
+            d_loss_cls = classification_loss(out_cls, label_org)
+            # Compute loss with fake images.
+            x_fake = G(x_real, c_trg)
+            out_src, out_cls = D(x_fake.detach())
+            d_loss_fake = torch.mean(out_src)
+            d_loss = d_loss_real + d_loss_fake + train_config.lambda_cls * d_loss_cls
 
-            # Train generator
-            g_loss = calculate_generator_loss(D, G, x_real, label_trg, c_org, c_trg, train_config)
+            # Calculate generator loss
+            # Original-to-target domain.
+            x_fake = G(x_real, c_trg)
+            out_src, out_cls = D(x_fake)
+            g_loss_fake = -torch.mean(out_src)
+            g_loss_cls = classification_loss(out_cls, label_trg)
+
+            # Target-to-original domain.
+            x_reconst = G(x_fake, c_org)
+            g_loss_rec = reconstruction_loss(x_real, x_reconst)
+            g_loss = g_loss_fake + train_config.lambda_rec * g_loss_rec + train_config.lambda_cls * g_loss_cls
 
             g_losses.append(g_loss.item())
             d_losses.append(d_loss.item())
@@ -292,13 +310,16 @@ def test(G: Generator, test_dataloader: DataLoader, config: Config):
         for i, (x_real, c_org) in enumerate(test_dataloader):
 
             # Prepare input images and target domain labels.
-            x_real = x_real.to(device)
-            c_trg_list = generate_valid_permutations(c_org[0], config.data.selected_attrs)  # not a batch
+            x_real_singe = x_real[0].unsqueeze(0).to(device)
+            c_org_sinle = c_org[0]
+            c_trg_list = generate_valid_permutations(c_org_sinle, config.data.selected_attrs)  # not a batch
 
             # Translate images.
-            x_fake_list = [x_real]
+            x_fake_list = [x_real_singe]
             for c_trg in c_trg_list:
-                x_fake_list.append(G(x_real, c_trg))
+                c_trg_single = c_trg.unsqueeze(0).to(device)
+                x_fake: torch.Tensor = G(x_real_singe, c_trg_single)
+                x_fake_list.append(x_fake)
 
             # Save the translated images.
             x_concat = torch.cat(x_fake_list, dim=3)
@@ -307,11 +328,42 @@ def test(G: Generator, test_dataloader: DataLoader, config: Config):
             print('Saved real and fake images into {}...'.format(result_path))
 
 
+def infer_and_save(G: Generator, image, c_org: torch.Tensor, config: Config):
+    with torch.no_grad():
+        # Load and preprocess the image
+        # transform = get_transform(config.data, 'test')
+        # image = Image.open(image_path).convert('RGB')
+        # x_real = transform(image).unsqueeze(0).to(device)
+        x_real_singe = image[0].unsqueeze(0).to(device)
+        c_org_sinle = c_org[0]
+        print(f"{c_org_sinle}")
+        print(f"{c_org_sinle.shape}")
+        print(f"{x_real_singe.shape}")
+        # Generate target labels permutations
+        c_trg_list = generate_valid_permutations(c_org_sinle, config.data.selected_attrs)
+
+        # Generate images
+        x_fake_list = [x_real_singe]
+        for idx, c_trg in enumerate(c_trg_list):
+            c_trg_single = c_trg.unsqueeze(0).to(device)
+
+            x_fake: torch.Tensor = G(x_real_singe, c_trg_single)
+            x_fake_list.append(x_fake)
+
+        # Concatenate images along width (dim=3)
+        x_concat = torch.cat(x_fake_list, dim=3)
+
+        # Save the concatenated images
+        result_path = Path('test') / 'inference_result.jpg'
+        save_image(denorm(x_concat.data.cpu()), result_path, nrow=1, padding=0)
+        print(f'Saved real and fake images into {result_path}...')
+
+
 if __name__ == '__main__':
     # Load configurations
     config = load_config('config/config.yaml')
 
-    # Setup logger
+    # #Setup logger
     setup_logger(config, device)
 
     # Create data loader
@@ -338,7 +390,21 @@ if __name__ == '__main__':
 
     wandb.finish()
 
-    # Test the model
     # test_dataloader = get_loader(config.data, config.training, 'test')
-    # G = load_checkpoint(Path(config.folders.checkpoints) / '1' / '100-G.ckpt', config.model)
-    # test(G, test_dataloader, config)
+    # test_image, label = next(iter(test_dataloader))
+    # print(f"{test_image.shape}")
+    # print(f"{label.shape}")
+    # print(type(test_image))
+    # print(type(label))
+    # # G = load_checkpoint(Path(config.folders.checkpoints) / '30-G.ckpt', config.model)
+    # # test(G, test_dataloader, config)
+
+    # # Load config and model
+    # G = load_checkpoint(Path(config.folders.checkpoints) / '30-G.ckpt', config.model)
+    # G.to(device)
+    # G.eval()
+
+    # # Prepare the original label tensor
+
+    # # Run inference and save images
+    # infer_and_save(G, test_image, label, config)

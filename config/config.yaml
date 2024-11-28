@@ -3,13 +3,13 @@ data:
   image_dir: 'images'
   attributes_file: 'list_attr_celeba.txt'
   selected_attrs:
-    -2: Old
-    -1: Female
-    8: Black_Hair
-    9: Blond_Hair
-    11: Brown_Hair
-    20: Male
-    39: Young
+    - Old
+    - Young
+    - Female
+    - Male
+    - Black_Hair
+    - Blond_Hair
+    - Brown_Hair
   crop_size: 178
   image_size : 128
 
@@ -36,7 +36,7 @@ training:
   num_workers: 0
   log_interval: 10 # iteration
   save_interval: 10 # epoch
-  val_interval: 5 # epoch
+  val_interval: 1 # epoch
   sample_interval: 1000000000 # epoch
   resume_training: False
   resume_checkpoint: ''
