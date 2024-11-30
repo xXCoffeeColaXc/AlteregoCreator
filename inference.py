@@ -12,16 +12,19 @@ from dataloader import get_transform
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def preprocess_input(image: Image.Image, user_attributes: list, all_attributes: dict,
+def preprocess_input(image: Image.Image, user_attributes: list,
                      config: DataConfig) -> tuple[torch.Tensor, list[torch.Tensor]]:
 
     transform = get_transform(config, 'val')
     image_tensor = transform(image)  # -> torch.Tensor Normalized image
 
     # Generate valid permutations
-    label_org = torch.tensor([1 if attr in user_attributes else 0 for attr in attrs.values()], dtype=torch.float32)
-    valid_permutations = generate_valid_permutations(label_org, all_attributes)
-
+    label_org = torch.tensor(
+        [1 if attr in user_attributes else 0 for attr in config.selected_attrs], dtype=torch.float32
+    )
+    print('label_org:', label_org)
+    valid_permutations = generate_valid_permutations(label_org, config.selected_attrs)
+    print('valid_permutations:', valid_permutations)
     return image_tensor, valid_permutations
 
 
@@ -30,11 +33,11 @@ def d(image):
 
 
 def postprocess_output(images: list[torch.Tensor], labels: list[torch.Tensor],
-                       all_attributes: dict) -> list[tuple[Image.Image, list[str]]]:
+                       all_attributes: list) -> list[tuple[Image.Image, list[str]]]:
     postprocessed_images_labels = []
     for image, label in zip(images, labels):
         print('-----------------')
-        image = d(image.cpu())
+        image = denorm(image.cpu())
         print(image.shape)
         print(type(image))
         print(image.max(), image.min())
@@ -43,15 +46,14 @@ def postprocess_output(images: list[torch.Tensor], labels: list[torch.Tensor],
         print(image.shape)
         print(type(image))
         print(image.max(), image.min())
-        label = [all_attributes[i] for i, label in enumerate(label.cpu().numpy()) if label == 1]
-        postprocessed_images_labels.append((Image.fromarray(image), label))
+        label_names = [all_attributes[i] for i, l in enumerate(label.cpu().numpy()) if l == 1]
+        postprocessed_images_labels.append((Image.fromarray(image), label_names))
 
     return postprocessed_images_labels
 
 
 def infer(G: Generator, input_tensor: torch.Tensor,
           target_labels: list[torch.Tensor]) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    G.eval()
     input_tensor = input_tensor.unsqueeze(0).to(device)
 
     # Generate images
@@ -79,20 +81,19 @@ if __name__ == '__main__':
 
     # Load model
     model_name = '30-G'
-    model_path = Path(config.folders.checkpoints) / f'{model_name}.ckpt'
-    G = load_checkpoint(Path(config.folders.checkpoints) / '30-G.ckpt', config.model)
+    model_path = Path(config.folders.checkpoints) / f'new_run/{model_name}.ckpt'
+    G = load_checkpoint(model_path, config.model)
 
     # Preprocess input
     input_image = Image.open('test/test_image.jpg').convert('RGB')
-    attrs = {0: 'Old', 1: 'Female', 2: 'Black_Hair', 3: 'Blond_Hair', 4: 'Brown_Hair', 5: 'Male', 6: 'Young'}
     user_attributes = ['Male', 'Black_Hair', 'Young']
-    input_tensor, target_labels = preprocess_input(input_image, user_attributes, attrs, config.data)
+    input_tensor, target_labels = preprocess_input(input_image, user_attributes, config.data)
 
     # Inference
     generated_images = infer(G, input_tensor, target_labels)
 
     # Postprocess output
-    postprocessed_images_labels = postprocess_output(generated_images, target_labels, attrs)
+    postprocessed_images_labels = postprocess_output(generated_images, target_labels, config.data.selected_attrs)
 
     # Save images
     save_images(postprocessed_images_labels, Path('test'))
