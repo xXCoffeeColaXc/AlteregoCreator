@@ -6,14 +6,14 @@ from config.models import Config
 from main import load_checkpoint, load_config
 from utils import denorm, generate_valid_permutations
 from network import Generator
-from dataloader import get_transform
+from torchvision import transforms
 
 # Initialize device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load config and model
 config: Config = load_config('config/config.yaml')
-model_path = Path(config.folders.checkpoints) / 'new_run/30-G.ckpt'
+model_path = Path(config.folders.checkpoints) / 'new_run/70-G.ckpt'
 G = load_checkpoint(model_path, config.model)
 
 gender_options = ["Female", "Male"]
@@ -26,7 +26,15 @@ def preprocess_input(image, user_attributes):
     if image.mode == 'RGBA':
         image = image.convert('RGB')
 
-    transform = get_transform(config.data, 'val')
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.data.crop_size),
+            transforms.CenterCrop(config.data.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ]
+    )
+
     image_tensor = transform(image)
     label_org = torch.tensor(
         [1 if attr in user_attributes else 0 for attr in config.data.selected_attrs], dtype=torch.float32
@@ -145,4 +153,4 @@ with gr.Blocks(theme=gr.themes.Default(primary_hue="blue", secondary_hue="purple
         preprocess=collect_attributes
     )
 
-alterego_app.launch()
+alterego_app.launch(share=True)

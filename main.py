@@ -316,10 +316,25 @@ def test(G: Generator, test_dataloader: DataLoader, config: Config):
 
             # Translate images.
             x_fake_list = [x_real_singe]
-            for c_trg in c_trg_list:
+            for j, c_trg in enumerate(c_trg_list):
                 c_trg_single = c_trg.unsqueeze(0).to(device)
                 x_fake: torch.Tensor = G(x_real_singe, c_trg_single)
                 x_fake_list.append(x_fake)
+
+                # Convert the label tensor to a readable label name (e.g., Old_Blond_Hair).
+                label_names = [
+                    config.data.selected_attrs[i] for i,
+                    l in enumerate(c_trg_single.squeeze(0).cpu().numpy()) if l == 1
+                ]
+                label_folder_name = "_".join(label_names) if label_names else "Unlabeled"
+
+                # # Create a directory for the label if it doesn't exist.
+                label_folder_path = Path(config.folders.samples) / str(run_id) / label_folder_name
+                label_folder_path.mkdir(parents=True, exist_ok=True)
+
+                # Save the image in the corresponding folder.
+                result_path = label_folder_path / f'{i+1}_{j+1}-image.jpg'
+                save_image(denorm(x_fake.data.cpu()), result_path, nrow=1, padding=0)
 
             # Save the translated images.
             x_concat = torch.cat(x_fake_list, dim=3)
@@ -361,5 +376,5 @@ if __name__ == '__main__':
 
     test_dataloader = get_loader(config.data, config.training, 'test')
     #test_image, label = next(iter(test_dataloader))
-    G = load_checkpoint(Path(config.folders.checkpoints) / 'new_run/30-G.ckpt', config.model)
+    G = load_checkpoint(Path(config.folders.checkpoints) / 'new_run/70-G.ckpt', config.model)
     test(G, test_dataloader, config)

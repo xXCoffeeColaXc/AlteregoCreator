@@ -71,7 +71,7 @@ def infer(G: Generator, input_tensor: torch.Tensor,
 
 def save_images(images_labels: list[tuple[Image.Image, list[str]]], save_dir: Path):
     for idx, (image, labels) in enumerate(images_labels):
-        image_path = save_dir / f'{idx}_{labels}.png'
+        image_path = save_dir / f'{idx}_{labels}_new.png'
         image.save(image_path)
 
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     config: Config = load_config('config/config.yaml')
 
     # Load model
-    model_name = '30-G'
+    model_name = '70-G'
     model_path = Path(config.folders.checkpoints) / f'new_run/{model_name}.ckpt'
     G = load_checkpoint(model_path, config.model)
 

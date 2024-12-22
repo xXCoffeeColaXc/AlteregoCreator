@@ -120,8 +120,8 @@ def get_transform(data_config: DataConfig, split: str = 'train'):
     elif split == 'val' or split == 'test':
         transform = transforms.Compose(
             [
-                transforms.Resize(data_config.crop_size, interpolation=Image.BILINEAR),
-                transforms.CenterCrop(data_config.image_size),
+                transforms.CenterCrop(data_config.crop_size),
+                transforms.Resize(data_config.image_size),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ]
